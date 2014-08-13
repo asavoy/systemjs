@@ -12,7 +12,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "es6-module-loader": "~0.7.1"
+    "es6-module-loader": "git://github.com/asavoy/es6-module-loader"
   },
   "devDependencies": {
     "qunit": "^0.6.2",
