@@ -7,8 +7,23 @@
 
 (function(__$global) {
 
-__$global.upgradeSystemLoader = function() {
-  __$global.upgradeSystemLoader = undefined;
+  var extend = function(d, s){
+    for(var prop in s) {
+      d[prop] = s[prop];
+    }
+    return d;
+  };
+
+  var cloneSystemLoader = function(System){
+    var Loader = __$global.Loader || __$global.LoaderPolyfill;
+    var loader = new Loader(System);
+    loader.baseURL = System.baseURL;
+    loader.paths = extend({}, System.paths);
+    loader.originalSystem = extend({}, System);
+    return loader;
+  };
+
+var __upgradeSystemLoader = function(baseLoader) {
 
   // indexOf polyfill for IE
   var indexOf = Array.prototype.indexOf || function(item) {
@@ -16,7 +31,7 @@ __$global.upgradeSystemLoader = function() {
       if (this[i] === item)
         return i;
     return -1;
-  }
+  };
 
   // Absolute URL parsing, from https://gist.github.com/Yaffle/1088850
   function parseURI(url) {
@@ -59,19 +74,13 @@ __$global.upgradeSystemLoader = function() {
       href.hash;
   }
 
-  // clone the original System loader
-  var originalSystem = __$global.System;
-  var System = __$global.System = new LoaderPolyfill(originalSystem);
-  System.baseURL = originalSystem.baseURL;
-  System.paths = { '*': '*.js' };
-  System.originalSystem = originalSystem;
+  var System = cloneSystemLoader(baseLoader);
 
   System.noConflict = function() {
     __$global.SystemJS = System;
     __$global.System = System.originalSystem;
-  }
-
-  /*
+  };
+/*
  * Meta Extension
  *
  * Sets default metadata on a load record (load.metadata) from
@@ -207,7 +216,7 @@ function register(loader) {
       }
     }
 
-    __eval(load.source, loader.global, load.address, sourceMappingURL);
+    __eval(load.source, loader.global, load.address, sourceMappingURL, load.metadata && load.metadata.scriptEval);
 
     // traceur overwrites System and Module - write them back
     if (load.name == '@traceur') {
@@ -510,8 +519,9 @@ function register(loader) {
         return getModule(entry.normalizedDeps[i], loader);
       }
     }, entry.module['default'], moduleName);
-    
-    if (output)
+    if ( output && output.__esModule )
+      entry.module = output;
+    else if (output)
       entry.module['default'] = output;
   }
 
@@ -728,7 +738,7 @@ function core(loader) {
     return loaderImport.call(this, name, options).then(function(module) {
       return module.__useDefault ? module['default'] : module;
     });
-  }
+  };
 
   // support the empty module, as a concept
   loader.set('@empty', loader.newModule({}));
@@ -763,7 +773,7 @@ function core(loader) {
       else
         this[c] = v;
     }
-  }
+  };
 
   // override locate to allow baseURL to be document-relative
   var baseURI;
@@ -790,7 +800,7 @@ function core(loader) {
     }
 
     return Promise.resolve(loaderLocate.call(this, load));
-  }
+  };
 
 
   // Traceur conveniences
@@ -824,7 +834,7 @@ function core(loader) {
     }
 
     return loaderTranslate.call(loader, load);
-  }
+  };
 
   // always load Traceur as a global
   var loaderInstantiate = loader.instantiate;
@@ -840,7 +850,7 @@ function core(loader) {
       };
     }
     return loaderInstantiate.call(loader, load);
-  }
+  };
 }
 /*
   SystemJS Global Format
@@ -889,6 +899,7 @@ function global(loader) {
       },
       retrieveGlobal: function(moduleName, exportName, init) {
         var singleGlobal;
+        var multipleExports;
         var exports = {};
 
         // run init
@@ -916,9 +927,9 @@ function global(loader) {
               exports[g] = loader.global[g];
               if (singleGlobal) {
                 if (singleGlobal !== loader.global[g])
-                  singleGlobal = undefined;
+                  multipleExports = true;
               }
-              else if (singleGlobal !== false) {
+              else if (singleGlobal === undefined) {
                 singleGlobal = loader.global[g];
               }
             }
@@ -927,7 +938,7 @@ function global(loader) {
 
         moduleGlobals[moduleName] = exports;
 
-        return typeof singleGlobal != 'undefined' ? singleGlobal : exports;
+        return multipleExports ? exports: singleGlobal;
       }
     }));
   }
@@ -980,13 +991,19 @@ function cjs(loader) {
   // CJS Module Format
   // require('...') || exports[''] = ... || exports.asd = ... || module.exports = ...
   var cjsExportsRegEx = /(?:^\s*|[}{\(\);,\n=:\?\&]\s*|module\.)(exports\s*\[\s*('[^']+'|"[^"]+")\s*\]|\exports\s*\.\s*[_$a-zA-Z\xA0-\uFFFF][_$a-zA-Z0-9\xA0-\uFFFF]*|exports\s*\=)/;
-  var cjsRequireRegEx = /(?:^\s*|[}{\(\);,\n=:\?\&]\s*)require\s*\(\s*("([^"]+)"|'([^']+)')\s*\)/g;
+  var cjsRequirePre = "(?:^\\s*|[}{\\(\\);,\\n=:\\?\\&]\\s*)";
+  var cjsRequirePost = "\\s*\\(\\s*(\"([^\"]+)\"|'([^']+)')\\s*\\)";
+  var cjsRequireRegEx = new RegExp(cjsRequirePre+"require"+cjsRequirePost,"g");
   var commentRegEx = /(\/\*([\s\S]*?)\*\/|([^:]|^)\/\/(.*)$)/mg;
 
-  function getCJSDeps(source) {
+  function getCJSDeps(source, requireAlias) {
     cjsExportsRegEx.lastIndex = 0;
-    cjsRequireRegEx.lastIndex = 0;
-
+    
+    // If a requireAlias is given, generate the regexp; otherwise, use the cached version.
+    var requireRegEx =  requireAlias ?
+        new RegExp(cjsRequirePre+(requireAlias)+cjsRequirePost,"g") :
+        cjsRequireRegEx;
+    requireRegEx.lastIndex = 0;
     var deps = [];
 
     // remove comments from the source first
@@ -994,7 +1011,7 @@ function cjs(loader) {
 
     var match;
 
-    while (match = cjsRequireRegEx.exec(source))
+    while (match = requireRegEx.exec(source))
       deps.push(match[2] || match[3]);
 
     return deps;
@@ -1064,13 +1081,16 @@ function cjs(loader) {
         for (var _g in globals)
           glString += 'var ' + _g + ' = _g.' + _g + ';';
 
-        load.source = glString + '(function() { ' + load.source + '\n}).call(exports)';
-
         // disable AMD detection
         var define = loader.global.define;
         loader.global.define = undefined;
 
-        loader.__exec(load);
+        var execLoad = {
+          name: load.name,
+          source: '(function() {' + glString + '\n(function(){\n' + load.source + '\n}).call(exports);})();',
+          address: load.address
+        };
+        loader.__exec(execLoad);
 
         loader.global.define = define;
 
@@ -1091,11 +1111,26 @@ function amd(loader) {
 
   var isNode = typeof module != 'undefined' && module.exports;
 
+  // Matches parenthesis
+  var parensRegExp = /\(([^)]+)/;
+  var commentRegEx = /(\/\*([\s\S]*?)\*\/|([^:]|^)\/\/(.*)$)/mg;
+  var argRegEx = /[\w\d]+/g;
+  function getRequireAlias(source, index){
+    var match = source.match(parensRegExp);
+    if(match){
+      var args = [];
+      match[1].replace(commentRegEx,"").replace(argRegEx, function(arg){
+        args.push(arg);
+      });
+      return args[index||0];
+    }
+  };
+  
+
   // AMD Module Format Detection RegEx
   // define([.., .., ..], ...)
   // define(varName); || define(function(require, exports) {}); || define({})
   var amdRegEx = /(?:^\s*|[}{\(\);,\n\?\&]\s*)define\s*\(\s*("[^"]+"\s*,\s*|'[^']+'\s*,\s*)?\s*(\[(\s*("[^"]+"|'[^']+')\s*,)*(\s*("[^"]+"|'[^']+')\s*,?\s*)?\]|function\s*|{|[_$a-zA-Z\xA0-\uFFFF][_$a-zA-Z0-9\xA0-\uFFFF]*\))/;
-
   /*
     AMD-compatible require
     To copy RequireJS, set window.require = window.requirejs = loader.require
@@ -1170,10 +1205,7 @@ function amd(loader) {
       }
       if (!(deps instanceof Array)) {
         factory = deps;
-        // CommonJS AMD form
-        if (!loader._getCJSDeps)
-          throw "AMD extension needs CJS extension for AMD CJS support";
-        deps = ['require', 'exports', 'module'].concat(loader._getCJSDeps(factory.toString()));
+        deps = ['require','exports','module']
       }
 
       if (typeof factory != 'function')
@@ -1183,8 +1215,17 @@ function amd(loader) {
 
       // remove system dependencies
       var requireIndex, exportsIndex, moduleIndex
-      if ((requireIndex = indexOf.call(deps, 'require')) != -1)
-        deps.splice(requireIndex, 1);
+      
+      if ((requireIndex = indexOf.call(deps, 'require')) != -1) {
+      	
+      	deps.splice(requireIndex, 1);
+        // CommonJS AMD form
+        if (!loader._getCJSDeps)
+          throw "AMD extension needs CJS extension for AMD CJS support";
+        var factoryText = factory.toString();
+        deps = deps.concat(loader._getCJSDeps(factoryText, getRequireAlias(factoryText, requireIndex)));
+      }
+        
 
       if ((exportsIndex = indexOf.call(deps, 'exports')) != -1)
         deps.splice(exportsIndex, 1);
@@ -1193,6 +1234,7 @@ function amd(loader) {
         deps.splice(moduleIndex, 1);
 
       var define = {
+        name: name,
         deps: deps,
         execute: function(require, exports, moduleName) {
 
@@ -1225,7 +1267,9 @@ function amd(loader) {
       // anonymous define
       if (!name) {
         // already defined anonymously -> throw
-        if (anonDefine)
+        // If the previous anonDefine has a name, then it's not a proper anonymous define
+        // and the current define should take precedence.
+        if (anonDefine && !anonDefine.name)
           throw "Multiple defines for anonymous module";
         anonDefine = define;
       }
@@ -1515,7 +1559,7 @@ function plugins(loader) {
       // standard normalization
       return name;
     });
-  }
+  };
 
   var loaderLocate = loader.locate;
   loader.locate = function(load) {
@@ -1549,6 +1593,7 @@ function plugins(loader) {
         load.metadata.plugin = plugin;
         load.metadata.pluginName = pluginName;
         load.metadata.pluginArgument = load.name;
+        load.metadata.buildType = plugin.buildType || "js";
 
         // run plugin locate if given
         if (plugin.locate)
@@ -1564,7 +1609,7 @@ function plugins(loader) {
     }
 
     return loaderLocate.call(this, load);
-  }
+  };
 
   var loaderFetch = loader.fetch;
   loader.fetch = function(load) {
@@ -1577,7 +1622,7 @@ function plugins(loader) {
     }
     else
       return loaderFetch.call(loader, load);
-  }
+  };
 
   var loaderTranslate = loader.translate;
   loader.translate = function(load) {
@@ -1591,17 +1636,20 @@ function plugins(loader) {
       });
     else
       return loaderTranslate.call(loader, load);
-  }
+  };
 
   var loaderInstantiate = loader.instantiate;
   loader.instantiate = function(load) {
     var loader = this;
-    if (load.metadata.plugin && load.metadata.plugin.execute)
-      return Promise.resolve(load.metadata.plugin.execute.call(loader, load)).then(function(result) {
-        load.metadata.format = 'defined';
-        load.metadata.execute = function() {
+    if (load.metadata.plugin && load.metadata.plugin.instantiate)
+       return Promise.resolve(load.metadata.plugin.instantiate.call(loader, load)).then(function(result) {
+        if (result) {
+          // load.metadata.format = 'defined';
+          // load.metadata.execute = function() {
+          //   return result;
+          // };
           return result;
-        };
+        }
         return loaderInstantiate.call(loader, load);
       });
     else if (load.metadata.plugin && load.metadata.plugin.build === false) {
@@ -1614,8 +1662,7 @@ function plugins(loader) {
     }
     else
       return loaderInstantiate.call(loader, load);
-  }
-
+  };
 }/*
   System bundles
 
@@ -1672,7 +1719,7 @@ function bundles(loader) {
       });
     }
     return loaderFetch.call(this, load);
-  }
+  };
 }/*
   SystemJS Semver Version Addon
   
@@ -1954,17 +2001,17 @@ function depCache(loader) {
   }
 }
   
-meta(System);
-register(System);
-core(System);
-global(System);
-cjs(System);
-amd(System);
-map(System);
-plugins(System);
-bundles(System);
-versions(System);
-depCache(System);
+  meta(System);
+  register(System);
+  core(System);
+  global(System);
+  cjs(System);
+  amd(System);
+  map(System);
+  plugins(System);
+  bundles(System);
+  versions(System);
+  depCache(System);
 
   
   if (!System.paths['@traceur'])
@@ -1973,14 +2020,25 @@ depCache(System);
         ? __$curScript.src.substr(0, __$curScript.src.lastIndexOf('/') + 1) 
         : System.baseURL + (System.baseURL.lastIndexOf('/') == System.baseURL.length - 1 ? '' : '/')
         ) + 'traceur.js';
+
+  return System;
 };
 
-function __eval(__source, __global, __address, __sourceMap) {
+function __eval(__source, __global, __address, __sourceMap, __useScript) {
   try {
-    __source = (__global != __$global ? 'with(__global) { (function() { ' + __source + ' \n }).call(__global); }' : __source)
-      + '\n//# sourceURL=' + __address
-      + (__sourceMap ? '\n//# sourceMappingURL=' + __sourceMap : '');
-    eval(__source);
+    if(__useScript && typeof document !== "undefined") {
+    	    var script = document.createElement("script");
+    	    script.text = __source
+    	      + '\n//# sourceURL=' + __address;
+    	    (document.head || document.body || document.documentElement).appendChild(script); 
+    } else {
+          __source = __source
+            + '\n//# sourceURL=' + __address
+            + (__sourceMap ? '\n//# sourceMappingURL=' + __sourceMap : '');
+          eval.call(__global, __source);
+    }
+    
+    
   }
   catch(e) {
     if (e.name == 'SyntaxError')
@@ -1994,6 +2052,15 @@ function __eval(__source, __global, __address, __sourceMap) {
 var __$curScript;
 
 (function(global) {
+  global.upgradeSystemLoader = function() {
+    global.upgradeSystemLoader = undefined;
+    var originalSystem = global.System;
+    global.System = __upgradeSystemLoader(global.System);
+    global.System.clone = function() {
+      return __upgradeSystemLoader(originalSystem);
+    };
+  };
+
   if (typeof window != 'undefined') {
     var scripts = document.getElementsByTagName('script');
     __$curScript = scripts[scripts.length - 1];

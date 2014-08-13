@@ -22,7 +22,7 @@ system:
 		cat lib/extension-$$extension.js >> dist/$@.js; \
 	done
 	for extension in $(SystemJS); do \
-		echo $$extension"(System);" >> dist/$@.js; \
+		echo "  "$$extension"(System);" >> dist/$@.js; \
 	done
 	$(END)
 

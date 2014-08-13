@@ -204,6 +204,7 @@ asyncTest('Loading a namespaced AMD bundle', function() {
   }, err);
 });
 
+
 asyncTest('Loading an AMD named define', function() {
   System['import']('tests/nameddefine').then(function(m1){
     ok(m1.converter, 'Showdown not loaded');
@@ -492,8 +493,108 @@ asyncTest('AMD & CJS circular, ES6 Circular', function() {
 
 asyncTest('AMD -> System.register circular -> ES6', function() {
   System['import']('tests/all-layers1').then(function(m) {
-    ok(m == true)
+    ok(m == true);
     start();
   }, err);
 });
 
+asyncTest("System.meta", function(){
+  System.meta = {
+    'tests/global-multi' : {
+      arbitraryMetaProperty: true,
+      exports: "jjQuery"
+    }
+  };
+
+  var oldLocate = System.locate;
+  System.locate = function(load){
+    var res = oldLocate.apply(this, arguments);
+    if(load.name == "tests/global-multi") {
+      ok(load.metadata.arbitraryMetaProperty, "got arbitrary metadata");
+    }
+    return res;
+  };
+
+  System['import']('tests/global-multi').then(function(m) {
+    ok(m.jquery === 'here', 'exports works right');
+    start();
+  }, err);
+});
+
+asyncTest("System.clone", function(){
+  var ClonedSystem  = System.clone();
+
+  System.map['maptest'] = 'tests/map-test';
+  ClonedSystem.map['maptest'] = 'tests/map-test-dep';
+
+  var systemDef = System['import']('maptest');
+  var cloneDef = ClonedSystem['import']('maptest');
+
+  Promise.all([systemDef, cloneDef]).then(function(modules){
+    var m = modules[0];
+    var mClone = modules[1];
+    ok(m.maptest == 'maptest', 'Mapped module not loaded');
+    ok(mClone.dep == 'maptest', 'Mapped module not loaded');
+    ok(mClone !== m, "different modules");
+    start();
+  });
+});
+
+asyncTest("bundled defines without dependencies", function(){
+  System.bundles["tests/amd-bundle/amd-bundled"] = ["amd-bundle", "amd-dependency"];
+
+  System['import']("amd-bundle").then(function(m){
+    equal(m.name, "tests/amd-bundle","got the right module value");
+    start();
+  }, function(e){
+    ok(false, "got error "+e);
+    start();
+  });
+});
+
+asyncTest("plugin instantiate hook", function(){
+  var testEl = document.createElement("div");
+  testEl.id = "test-element";
+  document.body.appendChild(testEl);
+
+  var instantiate = System.instantiate;
+  System.instantiate = function(load){
+    if( load.name.indexOf( "tests/build_types/test.css") === 0 ) {
+      equal(load.metadata.buildType, "css", "buildType set");
+    }
+    return instantiate.apply(this, arguments);
+  };
+
+  System['import']("tests/build_types/test.css!tests/build_types/css").then(function(value){
+    equal(testEl.clientWidth, 200, "style added to the page");
+    document.body.removeChild(testEl);
+    System.instantiate = instantiate;
+    start();
+  }, function(e){
+    ok(false, "got error "+e);
+    start();
+  });
+});
+
+asyncTest('AMD simplified CommonJS wrapping with an aliased require', function() {
+  System['import']('tests/amd-simplified-cjs-aliased-require1').then(function(m) {
+    ok(m.require2,"got dependency from aliased require");
+    ok(m.require2.amdCJS,"got dependency from aliased require listed as a dependency");
+    start();
+  }, err);
+});
+
+asyncTest('All global variables available with scriptEval option',function(){
+  System.meta["tests/global-variables"] = {format: "global", scriptEval: true};
+  System['import']('tests/global-variables').then(function(m){
+  	equal(m.foo,"bar","variable");
+  	equal(m.baz,"chaz","assignment");
+  	equal(m.zed,"ted","window property assignment");
+  	start();
+  }, function(){
+  	ok(false,"got error "+e);
+  	start();
+  });
+  
+  
+})
