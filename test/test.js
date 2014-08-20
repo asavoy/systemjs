@@ -109,6 +109,15 @@ asyncTest('Global script loading that detects as AMD with shim config', function
 });
 
 if (!ie8)
+asyncTest('Global script should not detect as ES6', function() {
+  traceur = undefined;
+  System['import']('tests/global-es6-false-positive').then(function(m) {
+    ok(typeof(traceur) == 'undefined', 'Traceur should not be loaded');
+    start();
+  }, err);
+});
+
+if (!ie8)
 asyncTest('Meta should override meta syntax', function() {
   System.meta['tests/meta-override'] = { format: 'es6' };
   System['import']('tests/meta-override').then(function(m) {
